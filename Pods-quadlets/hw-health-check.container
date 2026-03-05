@@ -1,0 +1,15 @@
+[Unit]
+Description=Infrastructure Health Check
+# Ensure hardware symlinks are present before checking
+Requires=dev-gps0.device dev-axelera0.device dev-cruiser-iot.device
+
+[Container]
+Image=alpine
+# Simple shell script to verify devices and log to Cockpit/Journal
+Exec=sh -c "for d in /dev/gps0 /dev/axelera0 /dev/cruiser-iot; do \
+      if [ -e $$d ]; then echo \"✅ $$d is UP\"; \
+      else echo \"❌ $$d is MISSING\"; exit 1; fi; done"
+Restart=on-failure
+
+[Install]
+WantedBy=multi-user.target
