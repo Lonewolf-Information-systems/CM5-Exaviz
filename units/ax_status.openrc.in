@@ -1,0 +1,18 @@
+#!/sbin/openrc-run
+
+# Custom command to check status from the CLI
+extra_commands="status_ai"
+
+depend() {
+    need axelera-slammer
+}
+
+status_ai() {
+    # Custom status check for the Axelera card
+    if [ -e /dev/axelera0 ]; then
+        /usr/bin/ax_status # or your custom stats binary
+    else
+        echo "Hardware not initialized."
+        return 1
+    fi
+}
