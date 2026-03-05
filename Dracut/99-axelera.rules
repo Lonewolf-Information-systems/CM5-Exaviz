@@ -1,0 +1,6 @@
+# Axelera M.2 (Pre-release & Retail)
+# This uses the 'accel' subsystem, which is the new standard for AI chips
+SUBSYSTEM=="accel", ATTRS{vendor}=="0x1e81", SYMLINK+="axelera0", TAG+="systemd", MODE="0660", GROUP="render"
+
+# Hailo-8 (For the 'others' who use your repo)
+SUBSYSTEM=="hailo_pci", ATTRS{vendor}=="1e60", SYMLINK+="hailo0", TAG+="systemd", MODE="0660", GROUP="render"
