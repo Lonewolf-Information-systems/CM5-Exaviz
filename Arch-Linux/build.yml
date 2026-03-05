@@ -1,4 +1,6 @@
 uses: 2m/arch-pkgbuild-builder@v1.16
 with:
   target: 'pkgbuild'
-  pkgname: 'ucm-bin'
+  pkgname: 'metis-dkms'
+  pkgname: 'metis-sdk'
+  pkgname: 'voyager-sdk'
