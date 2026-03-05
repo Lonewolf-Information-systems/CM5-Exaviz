@@ -1,0 +1,4 @@
+# This snippet ensures the kernel uses our 'Unified' DTB with overlays baked in
+# Drop into /etc/grub.d/ or append to GRUB_CMDLINE_LINUX
+insmod fdt
+fdt /boot/dtbs/combined-cruiser.dtb
