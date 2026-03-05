@@ -1,0 +1,29 @@
+# Exaviz Cruiser / Axelera HAL Installer
+DESTDIR ?=
+PREFIX ?= /usr
+FIRMWARE_DIR = $(DESTDIR)/lib/firmware/overlays
+DRACUT_DIR = $(DESTDIR)$(PREFIX)/lib/dracut/modules.d/90cruiser-hal
+UDEV_DIR = $(DESTDIR)/etc/udev/rules.d
+
+all: compile
+
+compile:
+	@echo "Compiling Device Tree Overlays..."
+	dtc -@ -I dts -O dtb -o overlays/exaviz-cruiser.dtbo overlays/exaviz-cruiser.dts
+	dtc -@ -I dts -O dtb -o overlays/axelera-metis.dtbo overlays/axelera-metis.dts
+
+install:
+	# Install Overlays
+	install -d $(FIRMWARE_DIR)
+	install -m 644 overlays/*.dtbo $(FIRMWARE_DIR)
+
+	# Install udev Rules
+	install -d $(UDEV_DIR)
+	install -m 644 udev/*.rules $(UDEV_DIR)
+
+	# Install Dracut Module
+	install -d $(DRACUT_DIR)
+	install -m 755 dracut/module-setup.sh $(DRACUT_DIR)
+	install -m 755 dracut/apply-overlays.sh $(DRACUT_DIR)
+
+	@echo "Installation complete. Run 'dracut --force' to update your initramfs."
