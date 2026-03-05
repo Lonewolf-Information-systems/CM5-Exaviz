@@ -1,0 +1,33 @@
+# PKGBUILD: exaviz-utils
+pkgname=exaviz-utils
+pkgver=1.0.0
+pkgrel=1
+pkgdesc="Utilities for Exaviz Cruiser CM5 carrier board management"
+arch=('aarch64')
+depends=('python' 'i2c-tools')
+source=(
+    "https://github.com/exaviz-ai/cruiser/archive/v${pkgver}.tar.gz"
+)
+sha256sums=('SKIP')
+
+package() {
+    cd "${srcdir}/cruiser-${pkgver}"
+
+    # board management CLI if they ship one
+    [[ -f "tools/exaviz-ctl" ]] && \
+        install -Dm755 "tools/exaviz-ctl" \
+                       "${pkgdir}/usr/bin/exaviz-ctl"
+
+    # fan/thermal management daemon
+    [[ -f "tools/exaviz-fand" ]] && {
+        install -Dm755 "tools/exaviz-fand" \
+                       "${pkgdir}/usr/bin/exaviz-fand"
+        install -Dm644 "tools/exaviz-fand.service" \
+                       "${pkgdir}/usr/lib/systemd/system/exaviz-fand.service"
+    }
+
+    # i2c device config for carrier peripherals
+    [[ -f "config/i2c-devices.conf" ]] && \
+        install -Dm644 "config/i2c-devices.conf" \
+                       "${pkgdir}/etc/exaviz/i2c-devices.conf"
+}
