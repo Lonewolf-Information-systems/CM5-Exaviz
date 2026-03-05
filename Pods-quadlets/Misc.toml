@@ -1,0 +1,167 @@
+Updated Image Script Additions
+# ── Additional packages for this stack ────────────────────────────────────────
+# Add to pacstrap call in image script
+
+STACK_PACKAGES=(
+    # NAS / Samba
+    samba
+    avahi                    # mDNS for TimeMachine discovery
+    nss-mdns
+
+    # Container runtime (HA + Frigate)
+    docker
+    docker-compose
+
+    # Filesystems
+    btrfs-progs
+    ntfs-3g                  # Windows disk access if needed
+    exfatprogs
+
+    # Axelera / PCIe
+    pciutils
+    usbutils
+
+    # Gentoo binhost
+    nginx                    # serve binhost over HTTP
+    rsync                    # sync packages
+
+    # Monitoring
+    htop
+    iotop
+    smartmontools            # SATA disk health
+    nvme-cli                 # NVMe health
+
+    # Network
+    networkmanager
+    nfs-utils                # NFS export option
+)
+# ── Frigate on NVMe/SATA — btrfs subvolume for recordings ────────────────────
+
+# Add to subvolume creation section:
+btrfs subvolume create "${BTRFS_TMP}/@frigate"
+btrfs subvolume create "${BTRFS_TMP}/@docker"
+
+# fstab additions:
+cat >> "${MOUNT_ROOT}/etc/fstab" <<EOF
+UUID=${ROOT_UUID}  /media/frigate  btrfs  ${BTRFS_OPTS},subvol=@frigate,nodatacow  0  0
+UUID=${ROOT_UUID}  /var/lib/docker btrfs  ${BTRFS_OPTS},subvol=@docker,nodatacow   0  0
+EOF
+# nodatacow on both — Frigate writes huge sequential files,
+# Docker layers don't benefit from CoW and it hurts performance
+# ── Samba config skeleton ─────────────────────────────────────────────────────
+mkdir -p "${MOUNT_ROOT}/etc/samba"
+cat > "${MOUNT_ROOT}/etc/samba/smb.conf" <<'EOF'
+[global]
+    workgroup = WORKGROUP
+    server string = CM5-NAS
+    server role = standalone server
+    log file = /var/log/samba/%m.log
+    max log size = 50
+    dns proxy = no
+    # mDNS / TimeMachine
+    multicast dns register = yes
+
+[windows-backups]
+    path = /srv/nas/windows-backups
+    valid users = @nas-users
+    read only = no
+    browsable = yes
+    create mask = 0664
+    directory mask = 0775
+
+[timemachine]
+    path = /srv/nas/timemachine
+    valid users = @nas-users
+    read only = no
+    fruit:aapl = yes
+    fruit:time machine = yes      # TimeMachine over SMB
+    vfs objects = catia fruit streams_xattr
+
+[frigate-snapshots]
+    path = /media/frigate/snapshots
+    valid users = @nas-users
+    read only = yes
+    browsable = yes
+
+[gentoo-binhost]
+    path = /srv/gentoo-binhost
+    public = yes
+    read only = yes
+    browsable = yes
+EOF
+# ── Gentoo binhost nginx config ───────────────────────────────────────────────
+mkdir -p "${MOUNT_ROOT}/etc/nginx/sites-available"
+cat > "${MOUNT_ROOT}/etc/nginx/sites-available/gentoo-binhost" <<'EOF'
+server {
+    listen 80;
+    server_name gentoo-binhost.local;
+
+    root /srv/gentoo-binhost;
+    autoindex on;
+
+    # Gentoo portage fetches packages by path
+    # /srv/gentoo-binhost/
+    #   └── aarch64-unknown-linux-gnu/
+    #       └── packages/
+    #           └── *.gpkg.tar  or  *.xpak
+
+    location / {
+        try_files $uri $uri/ =404;
+    }
+
+    # compress package listings
+    gzip on;
+    gzip_types text/plain application/octet-stream;
+}
+EOF
+# ── Home Assistant container compose ─────────────────────────────────────────
+mkdir -p "${MOUNT_ROOT}/etc/homeassistant"
+cat > "${MOUNT_ROOT}/etc/homeassistant/docker-compose.yml" <<'EOF'
+version: "3.8"
+services:
+
+  homeassistant:
+    image: ghcr.io/home-assistant/home-assistant:stable
+    container_name: homeassistant
+    restart: unless-stopped
+    privileged: true
+    network_mode: host
+    volumes:
+      - /etc/homeassistant/config:/config
+      - /etc/localtime:/etc/localtime:ro
+    devices:
+      - /dev/ttyUSB0:/dev/ttyUSB0   # Zigbee/Z-wave dongle if attached
+
+  frigate:
+    image: ghcr.io/blakeblackshear/frigate:stable
+    container_name: frigate
+    restart: unless-stopped
+    privileged: true                 # needed for Metis PCIe device access
+    shm_size: "256mb"               # increase for more cameras
+    devices:
+      - /dev/axelera0:/dev/axelera0  # Metis AIPU
+      - /dev/dri:/dev/dri            # VC4 GPU for decode assist
+    volumes:
+      - /etc/frigate:/config
+      - /media/frigate:/media/frigate
+      - /etc/localtime:/etc/localtime:ro
+    ports:
+      - "5000:5000"    # Frigate web UI
+      - "8554:8554"    # RTSP restream
+      - "8555:8555/tcp"
+      - "8555:8555/udp"
+    environment:
+      FRIGATE_RTSP_PASSWORD: "changeme"
+
+  # MQTT broker — HA <-> Frigate event bus
+  mosquitto:
+    image: eclipse-mosquitto:latest
+    container_name: mosquitto
+    restart: unless-stopped
+    ports:
+      - "1883:1883"
+    volumes:
+      - /etc/mosquitto:/mosquitto/config
+      - /srv/nas/mosquitto-data:/mosquitto/data
+
+EOF
