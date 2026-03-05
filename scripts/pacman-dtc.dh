@@ -1,0 +1,5 @@
+# Install the compiler
+sudo pacman -S dtc
+
+# Compile an overlay standalone
+dtc -@ -I dts -O dtb -o exaviz-cruiser.dtbo exaviz-cruiser.dts
