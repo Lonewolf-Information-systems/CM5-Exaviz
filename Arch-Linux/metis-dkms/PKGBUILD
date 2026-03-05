@@ -1,0 +1,24 @@
+pkgname=metis-dkms
+pkgver=1.5.0
+pkgrel=1
+pkgdesc="Axelera Metis PCIe driver (DKMS)"
+arch=('x86_64' 'aarch64')
+url="https://github.com/axelera-ai-hub/axelera-driver"
+license=('GPL2')
+depends=('dkms')
+makedepends=('linux-headers')
+source=("$pkgname-$pkgver::https://github.com/axelera-ai-hub/axelera-driver/archive/refs/tags/v$pkgver.tar.gz")
+sha256sums=('SKIP')
+
+build() {
+	cd axelera-driver-$pkgver
+}
+
+package() {
+	cd axelera-driver-$pkgver
+	install -d "$pkgdir/usr/src/metis-$pkgver"
+	cp -r . "$pkgdir/usr/src/metis-$pkgver"
+
+	install -Dm644 dkms.conf \
+		"$pkgdir/usr/src/metis-$pkgver/dkms.conf"
+}
