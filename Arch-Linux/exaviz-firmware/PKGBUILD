@@ -1,0 +1,62 @@
+# PKGBUILD: exaviz-firmware
+pkgname=exaviz-firmware
+pkgver=1.0.0
+pkgrel=1
+pkgdesc="Firmware blobs for Exaviz Cruiser CM5 carrier peripherals"
+arch=('aarch64')
+url="https://github.com/exaviz-ai/cruiser"
+license=('custom:proprietary')
+depends=()
+# Extract from their .deb — repack approach
+source=(
+    "exaviz-cruiser-firmware_${pkgver}_arm64.deb::${EXAVIZ_DEB_URL}"
+)
+sha256sums=('SKIP')
+
+# Helper: extract deb inline
+_extract_deb() {
+    local deb="$1" outdir="$2"
+    mkdir -p "$outdir"
+    ar x "$deb" --output="$outdir"
+    if [[ -f "${outdir}/data.tar.xz" ]]; then
+        tar -xf "${outdir}/data.tar.xz" -C "$outdir"
+    elif [[ -f "${outdir}/data.tar.zst" ]]; then
+        tar -xf "${outdir}/data.tar.zst" -C "$outdir"
+    elif [[ -f "${outdir}/data.tar.gz" ]]; then
+        tar -xf "${outdir}/data.tar.gz" -C "$outdir"
+    fi
+}
+
+prepare() {
+    _extract_deb \
+        "exaviz-cruiser-firmware_${pkgver}_arm64.deb" \
+        "${srcdir}/extracted"
+}
+
+package() {
+    local ext="${srcdir}/extracted"
+
+    # firmware blobs
+    [[ -d "${ext}/lib/firmware" ]] && \
+        cp -r "${ext}/lib/firmware/"* \
+              "${pkgdir}/usr/lib/firmware/" 2>/dev/null || true
+
+    # udev rules
+    [[ -d "${ext}/etc/udev/rules.d" ]] && {
+        install -dm755 "${pkgdir}/usr/lib/udev/rules.d"
+        cp "${ext}/etc/udev/rules.d/"* \
+           "${pkgdir}/usr/lib/udev/rules.d/"
+    }
+
+    # modprobe config if any
+    [[ -d "${ext}/etc/modprobe.d" ]] && {
+        install -dm755 "${pkgdir}/usr/lib/modprobe.d"
+        cp "${ext}/etc/modprobe.d/"* \
+           "${pkgdir}/usr/lib/modprobe.d/"
+    }
+
+    install -Dm644 /dev/stdin \
+        "${pkgdir}/usr/share/licenses/${pkgname}/LICENSE" <<'EOF'
+Exaviz firmware — proprietary, redistributable with hardware
+EOF
+}
