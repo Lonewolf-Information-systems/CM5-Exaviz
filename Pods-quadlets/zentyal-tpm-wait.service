@@ -1,0 +1,12 @@
+[Unit]
+Description=Wait for TPM for Zentyal LDAP Sealing
+Before=slapd.service samba-ad-dc.service
+ConditionPathExists=/dev/tpm0
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/tpm2_pcrread sha256:0,7
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target
