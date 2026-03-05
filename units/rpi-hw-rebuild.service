@@ -1,0 +1,15 @@
+[Unit]
+Description=Sync Hardware Overlays to Bootloader and Initramfs
+After=network.target
+
+[Service]
+Type=oneshot
+# Rebuild the combined DTB for GRUB/UEFI
+ExecStart=/usr/bin/fdtoverlay -i /boot/dtbs/base.dtb -o /boot/dtbs/combined.dtb /lib/firmware/overlays/exaviz-cruiser.dtbo /lib/firmware/overlays/axelera-metis.dtbo
+# Refresh dracut to include the new blobs
+ExecStart=/usr/bin/dracut --force --regenerate-all
+# Update GRUB to ensure the FDT path is correct
+ExecStart=/usr/bin/grub-mkconfig -o /boot/grub/grub.cfg
+
+[Install]
+WantedBy=multi-user.target
