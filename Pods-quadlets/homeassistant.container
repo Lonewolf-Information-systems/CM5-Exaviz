@@ -1,0 +1,38 @@
+/etc/containers/systemd/homeassistant.container
+[Unit]
+Description=Home Assistant
+After=network-online.target mosquitto.service
+Wants=network-online.target
+# ensure mosquitto is up before HA tries to connect
+
+[Container]
+Image=ghcr.io/home-assistant/home-assistant:stable
+ContainerName=homeassistant
+Pod=hass-pod.pod
+
+# host network for mDNS discovery of devices — critical for HA
+Network=host
+
+# HA needs system time and host device access for USB dongles
+Volume=/etc/homeassistant/config:/config:Z
+Volume=/etc/localtime:/etc/localtime:ro
+Volume=/run/dbus:/run/dbus:ro   # DBus for bluetooth if used
+
+# USB Zigbee/Zwave dongle — adjust device path
+# AddDevice=/dev/ttyUSB0
+
+Environment=TZ=UTC
+
+# HA supervised needs this; container mode is fine without
+# Privileged=true
+
+PodmanArgs=--pull=newer
+
+[Service]
+Restart=on-failure
+RestartSec=15
+# give HA time to write state cleanly on stop
+TimeoutStopSec=60
+
+[Install]
+WantedBy=multi-user.target default.target
