@@ -1,0 +1,20 @@
+#!/sbin/openrc-run
+
+name="Axelera Hardware Monitor"
+description="Background watchdog for AI chip health"
+
+# The 'daemon' magic
+command="/usr/bin/axelera-stats-logger"
+command_args="--interval 60 --syslog"
+command_background="yes"
+pidfile="/run/${RC_SVCNAME}.pid"
+
+depend() {
+    need dev
+    after axelera-slammer # Wait for the DTBO slammer to finish
+}
+
+start_pre() {
+    # Verify the AI chip actually exists before backgrounding
+    [ -e /dev/axelera0 ]
+}
