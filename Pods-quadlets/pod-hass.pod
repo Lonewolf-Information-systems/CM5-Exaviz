@@ -1,0 +1,270 @@
+Good call — Podman + Quadlet is cleaner than Docker for this use case. Systemd-native, rootless capable, no daemon, and Cockpit-podman gives a decent web UI for the CM5 headless management story.
+podman-docker shim means the Frigate/HA images pull and run unchanged.
+Package additions to image script
+PODMAN_PACKAGES=(
+    podman
+    podman-docker          # docker CLI shim → podman
+    cockpit
+    cockpit-podman
+    cockpit-networkmanager
+    cockpit-storaged       # btrfs/SATA disk management in UI
+    cockpit-packagekit     # package updates via UI
+    buildah                # image builds if needed
+    crun                   # OCI runtime (faster than runc on aarch64)
+)
+Quadlet Units
+Quadlet lives in /etc/containers/systemd/ for system-wide (root) containers. These generate systemd units automatically on systemd daemon-reload.
+/etc/containers/systemd/
+├── homeassistant.container
+├── mosquitto.container
+├── frigate.container
+└── pod-hass.pod           # optional — group HA + mosquitto in a pod
+/etc/containers/systemd/pod-hass.pod
+[Pod]
+PodName=hass-pod
+Network=host
+/etc/containers/systemd/mosquitto.container
+[Unit]
+Description=Mosquitto MQTT Broker
+After=network-online.target
+Wants=network-online.target
+
+[Container]
+Image=docker.io/eclipse-mosquitto:latest
+ContainerName=mosquitto
+Pod=hass-pod.pod
+
+Volume=/etc/mosquitto/config:/mosquitto/config:Z
+Volume=/srv/nas/mosquitto-data:/mosquitto/data:Z
+Volume=/srv/nas/mosquitto-log:/mosquitto/log:Z
+
+# persist across updates
+PodmanArgs=--pull=newer
+
+[Service]
+Restart=on-failure
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target default.target
+/etc/containers/systemd/homeassistant.container
+[Unit]
+Description=Home Assistant
+After=network-online.target mosquitto.service
+Wants=network-online.target
+# ensure mosquitto is up before HA tries to connect
+
+[Container]
+Image=ghcr.io/home-assistant/home-assistant:stable
+ContainerName=homeassistant
+Pod=hass-pod.pod
+
+# host network for mDNS discovery of devices — critical for HA
+Network=host
+
+# HA needs system time and host device access for USB dongles
+Volume=/etc/homeassistant/config:/config:Z
+Volume=/etc/localtime:/etc/localtime:ro
+Volume=/run/dbus:/run/dbus:ro   # DBus for bluetooth if used
+
+# USB Zigbee/Zwave dongle — adjust device path
+# AddDevice=/dev/ttyUSB0
+
+Environment=TZ=UTC
+
+# HA supervised needs this; container mode is fine without
+# Privileged=true
+
+PodmanArgs=--pull=newer
+
+[Service]
+Restart=on-failure
+RestartSec=15
+# give HA time to write state cleanly on stop
+TimeoutStopSec=60
+
+[Install]
+WantedBy=multi-user.target default.target
+/etc/containers/systemd/frigate.container
+[Unit]
+Description=Frigate NVR
+After=network-online.target homeassistant.service
+Wants=network-online.target
+
+[Container]
+Image=ghcr.io/blakeblackshear/frigate:stable
+ContainerName=frigate
+ContainerName=frigate
+
+# Frigate needs host network for RTSP camera streams
+Network=host
+
+# Axelera Metis AIPU
+AddDevice=/dev/axelera0
+
+# GPU decode assist (VC4 / V3D on CM5)
+AddDevice=/dev/dri/card0
+AddDevice=/dev/dri/renderD128
+
+Volume=/etc/frigate/config.yml:/config/config.yml:ro,Z
+Volume=/media/frigate:/media/frigate:Z
+Volume=/etc/localtime:/etc/localtime:ro
+
+# SHM for frame buffers — scale with camera count
+# 64mb per camera is a rough guide
+ShmSize=512m
+
+Environment=TZ=UTC
+
+PodmanArgs=--pull=newer
+
+[Service]
+Restart=on-failure
+RestartSec=15
+TimeoutStopSec=30
+
+[Install]
+WantedBy=multi-user.target default.target
+Mosquitto config
+mkdir -p "${MOUNT_ROOT}/etc/mosquitto/config"
+cat > "${MOUNT_ROOT}/etc/mosquitto/config/mosquitto.conf" <<'EOF'
+listener 1883 127.0.0.1
+allow_anonymous true
+
+# persistence
+persistence true
+persistence_location /mosquitto/data/
+
+log_dest file /mosquitto/log/mosquitto.log
+log_type error
+log_type warning
+log_type information
+
+# HA + Frigate both on localhost via host network pod
+# lock to loopback — nothing external needs MQTT directly
+EOF
+Frigate config for HA integration
+mkdir -p "${MOUNT_ROOT}/etc/frigate"
+cat > "${MOUNT_ROOT}/etc/frigate/config.yml" <<'EOF'
+# Frigate config — CM5 Exaviz / Axelera Metis
+# Home Assistant integration via MQTT auto-discovery
+
+mqtt:
+  enabled: true
+  host: 127.0.0.1        # localhost — pod shares host network
+  port: 1883
+  # HA Frigate integration picks up events from here automatically
+  # Add frigate integration in HA store → configure with this broker
+
+detectors:
+  # Axelera Metis AX2520 — swap for cpu: if Metis not yet configured
+  axelera:
+    type: axelera
+    device: /dev/axelera0
+  # cpu fallback — comment out once Metis is confirmed working
+  # cpu_fallback:
+  #   type: cpu
+  #   num_threads: 4
+
+database:
+  path: /media/frigate/frigate.db
+
+record:
+  enabled: true
+  retain:
+    days: 3
+    mode: motion          # only retain segments with motion
+  events:
+    retain:
+      default: 14
+      mode: active_objects
+
+snapshots:
+  enabled: true
+  retain:
+    default: 14
+
+objects:
+  track:
+    - person
+    - car
+    - dog
+    - cat
+    - package
+
+# cameras: add your cams here
+# cameras:
+#   front_door:
+#     ffmpeg:
+#       inputs:
+#         - path: rtsp://user:pass@192.168.1.x/stream
+#           roles: [detect, record]
+#     detect:
+#       width: 1920
+#       height: 1080
+#       fps: 5            # low fps is fine — Metis is fast enough for burst
+EOF
+Cockpit setup in image script
+# ── Cockpit ───────────────────────────────────────────────────────────────────
+info "Configuring Cockpit..."
+
+# cockpit listens on 9090
+mkdir -p "${MOUNT_ROOT}/etc/cockpit"
+cat > "${MOUNT_ROOT}/etc/cockpit/cockpit.conf" <<'EOF'
+[WebService]
+# Allowed origins — adjust to your LAN
+AllowUnencrypted=true
+
+[Session]
+IdleTimeout=60
+EOF
+
+# allow cockpit through if using nftables/firewalld
+# arch-chroot "$MOUNT_ROOT" firewall-cmd --permanent --add-service=cockpit
+
+arch-chroot "$MOUNT_ROOT" systemctl enable cockpit.socket
+ok "Cockpit enabled → https://cm5-hostname:9090"
+Quadlet activation in image script
+# ── Deploy Quadlet units ───────────────────────────────────────────────────────
+info "Installing Quadlet container units..."
+mkdir -p "${MOUNT_ROOT}/etc/containers/systemd"
+
+# copy units written above into image
+for unit in pod-hass.pod mosquitto.container \
+            homeassistant.container frigate.container; do
+    cp "${SCRIPT_DIR}/quadlet/${unit}" \
+       "${MOUNT_ROOT}/etc/containers/systemd/${unit}"
+done
+
+# create required directories
+mkdir -p "${MOUNT_ROOT}/etc/homeassistant/config"
+mkdir -p "${MOUNT_ROOT}/etc/mosquitto/config"
+mkdir -p "${MOUNT_ROOT}/etc/frigate"
+mkdir -p "${MOUNT_ROOT}/media/frigate"/{recordings,snapshots,clips}
+mkdir -p "${MOUNT_ROOT}/srv/nas"/{windows-backups,timemachine,mosquitto-data,mosquitto-log}
+
+# Quadlet units are picked up by systemd generator automatically
+# daemon-reload on first boot triggers generation
+# no explicit systemctl enable needed for Quadlet — WantedBy handles it
+arch-chroot "$MOUNT_ROOT" systemctl enable podman-auto-update.timer
+ok "Quadlet units deployed — will activate on first boot daemon-reload"
+First Boot Sequence
+What happens on first boot automatically:
+systemd starts
+  → systemd-generator runs quadlet generator
+    → generates homeassistant.service mosquitto.service frigate.service
+      → pulls container images (needs network)
+        → starts pod-hass pod
+          → mosquitto starts
+          → homeassistant starts → writes /config → ready on :8123
+          → frigate starts → connects MQTT → ready on :5000
+
+cockpit.socket → on-demand → :9090
+HA Frigate integration install path once HA is running:
+HA web UI :8123
+  → Settings → Integrations → Add Integration
+    → search "Frigate"
+      → install from HACS or official store
+        → configure: Frigate URL = http://127.0.0.1:5000
+                     MQTT = already auto-discovered via broker
+Since everything is on host network in the same pod, all service discovery is localhost — no fiddly container networking to debug on first bring-up, which matters a lot when you're doing this headless over UART or early dropbear SSH.
