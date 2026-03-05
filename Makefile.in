@@ -1,0 +1,16 @@
+DTC = dtc
+DTC_FLAGS = -@ -I dts -O dtb
+
+# Find all dts files in overlays/
+SOURCES = $(wildcard overlays/*.dts)
+OBJECTS = $(SOURCES:.dts=.dtbo)
+
+all: $(OBJECTS)
+
+%.dtbo: %.dts
+	$(DTC) $(DTC_FLAGS) -o $@ $<
+
+install: all
+	install -D -m 644 overlays/*.dtbo /lib/firmware/overlays/
+	# Install the dracut module logic we discussed earlier
+	install -D -m 755 dracut/module-setup.sh /usr/lib/dracut/modules.d/90cruiser/module-setup.sh
