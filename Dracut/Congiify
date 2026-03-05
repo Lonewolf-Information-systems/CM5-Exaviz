@@ -1,0 +1,4 @@
+# /etc/dracut.conf.d/axelera.conf
+add_drivers+=" axdevice pci_patch " 
+# /etc/dracut.conf.d/cruiser.conf
+add_drivers+=" rp1_sdio_clk0 industrialio "
