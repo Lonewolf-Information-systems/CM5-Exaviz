@@ -1,0 +1,31 @@
+# PKGBUILD: exaviz-dkms
+# Only needed if Exaviz ships out-of-tree kernel modules
+# (fan controller, custom GPIO expander, etc.)
+pkgname=exaviz-dkms
+pkgver=1.0.0
+pkgrel=1
+pkgdesc="DKMS kernel modules for Exaviz Cruiser CM5"
+arch=('aarch64')
+depends=('dkms' 'linux-rpi-headers')
+source=(
+    "https://github.com/exaviz-ai/cruiser/archive/v${pkgver}.tar.gz"
+)
+sha256sums=('SKIP')
+
+package() {
+    local modname="exaviz-cruiser"
+    local modver="${pkgver}"
+    local destdir="${pkgdir}/usr/src/${modname}-${modver}"
+
+    install -dm755 "$destdir"
+    cp -r "${srcdir}/cruiser-${pkgver}/drivers/"* "$destdir/"
+
+    # dkms.conf — adjust MODULE_NAME to match their Makefile target
+    cat > "${destdir}/dkms.conf" <<EOF
+PACKAGE_NAME="${modname}"
+PACKAGE_VERSION="${modver}"
+BUILT_MODULE_NAME[0]="exaviz_cruiser"
+DEST_MODULE_LOCATION[0]="/kernel/drivers/misc"
+AUTOINSTALL="yes"
+EOF
+}
