@@ -1,0 +1,46 @@
+# PKGBUILD: exaviz-dt-overlays
+# Device tree overlays for Exaviz Cruiser CM5 carrier
+# Source: extracted from Exaviz Debian BSP or their GitHub
+
+pkgname=exaviz-dt-overlays
+pkgver=1.0.0                    # update from their releases
+pkgrel=1
+pkgdesc="Device tree overlays for Exaviz Cruiser CM5 carrier board"
+arch=('aarch64')
+url="https://github.com/exaviz-ai/cruiser"   # placeholder — check actual repo
+license=('GPL2')
+depends=('linux-rpi')
+# If they have a GitHub releases page:
+source=(
+    "https://github.com/exaviz-ai/cruiser/releases/download/v${pkgver}/exaviz-overlays-${pkgver}.tar.gz"
+    # or extract from their .deb:
+    # "exaviz-cruiser-dtb_${pkgver}_arm64.deb"
+)
+sha256sums=('SKIP')             # fill in once source is known
+
+package() {
+    # DTB overlays go to /boot/overlays/ — same path as RPi firmware expects
+    install -dm755 "${pkgdir}/boot/overlays"
+
+    # adjust glob to match actual extracted filenames
+    for dtbo in "${srcdir}"/overlays/*.dtbo \
+                "${srcdir}"/*.dtbo; do
+        [[ -f "$dtbo" ]] && \
+            install -Dm644 "$dtbo" "${pkgdir}/boot/overlays/$(basename "$dtbo")"
+    done
+
+    # Base DTB if they ship a modified one
+    for dtb in "${srcdir}"/*.dtb; do
+        [[ -f "$dtb" ]] && \
+            install -Dm644 "$dtb" "${pkgdir}/boot/$(basename "$dtb")"
+    done
+
+    # Install hook to append to config.txt if needed
+    install -dm755 "${pkgdir}/usr/share/exaviz"
+    cat > "${pkgdir}/usr/share/exaviz/config-fragment.txt" <<'EOF'
+# Exaviz Cruiser CM5 overlays
+dtparam=pciex1=on
+# dtoverlay=exaviz-sata          # uncomment if SATA overlay ships
+# dtoverlay=exaviz-fan-control   # if carrier has managed fan
+EOF
+}
