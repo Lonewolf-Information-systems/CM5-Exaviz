@@ -1,0 +1,35 @@
+# frigate config snippet — Axelera Metis detector
+# /etc/frigate/config.yml
+
+detectors:
+  axelera_metis:
+    type: axelera                    # requires frigate-axelera plugin
+    device: /dev/axelera0            # or PCIe path
+    num_threads: 4
+
+cameras:
+  front_door:
+    ffmpeg:
+      inputs:
+        - path: rtsp://cam-ip/stream
+          roles: [detect, record]
+    detect:
+      width: 1920
+      height: 1080
+      fps: 10
+    record:
+      enabled: true
+      retain:
+        days: 7
+      events:
+        retain:
+          default: 14
+    snapshots:
+      enabled: true
+    objects:
+      track: [person, car, dog, package]
+
+# recordings path → NVMe or SATA
+media:
+  recordings_path: /media/frigate/recordings
+  snapshots_path:  /media/frigate/snapshots
