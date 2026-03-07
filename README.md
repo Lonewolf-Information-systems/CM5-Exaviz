@@ -14,4 +14,4 @@ systemd to openrc converter units.
 HOMEPAGE="https://github.com/axelera-ai-hub/voyager-sdk"
 
 
-https://bugs.gentoo.org/970907 gentoo related axelera ai metis m.2 bits for gentoo... ie emerge... a bit more powerful than halio ai for simular prices... but i nabbed at pre launch discount
+gentoo related axelera ai metis m.2 bits for gentoo... ie emerge... a bit more powerful than halio ai for simular prices... but i nabbed at pre launch discount
