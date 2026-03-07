@@ -1,0 +1,67 @@
+--- a/qemu-archstrap-image-rpi5.sh
++++ b/qemu-archstrap-image-rpi5.sh
+@@ -1,6 +1,8 @@
+ #!/usr/bin/env bash
+ # qemu-archstrap-image-rpi5
+-# RPi5 / CM5 Exaviz carrier — btrfs @boot @/ @swap dracut dropbear UEFI GRUB
++# RPi5 / CM5 Exaviz Cruiser — btrfs @boot @/ @swap dracut dropbear UEFI GRUB
++# config.txt: worproject zip base + Exaviz Cruiser fragment
++# Refs: https://github.com/worproject/rpi5-uefi/blob/master/config.txt
+ set -euo pipefail
+ 
+@@ -198,9 +198,48 @@ ok "RPi5 UEFI firmware files copied"
+-# config.txt — blind copy from zip
+-cp "${UEFI_TMP}/uefi/config.txt" "$ESP_ROOT/" 2>/dev/null || true
++# ── deploy_config_txt ─────────────────────────────────────────────────────────
++# Copy worproject config.txt from zip (authoritative base), then append
++# Exaviz Cruiser CM5 board-specific fragment.
++# die() if armstub line missing — catches wrong zip / corrupt download early.
++deploy_config_txt() {
++    local esp="$1"
++    local uefi_zip_dir="$2"
++
++    [[ -f "${uefi_zip_dir}/config.txt" ]] || \
++        die "config.txt not in UEFI zip — check worproject release contents"
++
++    grep -q "armstub=RPI_EFI.fd" "${uefi_zip_dir}/config.txt" || \
++        die "config.txt missing armstub=RPI_EFI.fd — wrong zip or corrupt download"
++
++    info "Copying worproject config.txt to ESP..."
++    cp "${uefi_zip_dir}/config.txt" "${esp}/config.txt"
++
++    info "Appending Exaviz Cruiser CM5 fragment..."
++    cat >> "${esp}/config.txt" <<'EXAVIZ_FRAGMENT'
++
++# ── Exaviz Cruiser CM5 ────────────────────────────────────────────────────────
++# Appended by qemu-archstrap-image-rpi5
++
++arm_64bit=1
++
++# PCIe x1 gen3 — M.2 slots (Axelera Metis AX2520 + NVMe)
++dtparam=pciex1=on
++dtparam=pciex1_gen=3
++
++# NVMe on CM5 M.2
++dtparam=nvme=on
++
++# UART debug — keep until bring-up confirmed stable
++enable_uart=1
++uart_2ndstage=1
++
++# SATA via PCIe bridge on Exaviz Cruiser
++# dtoverlay=exaviz-sata        # uncomment once exaviz-dt-overlays available
++
++# Minimal GPU memory — headless NVR/NAS
++gpu_mem=16
++
++# Fan header — adjust gpiopin to Exaviz Cruiser schematic
++# dtoverlay=gpio-fan,gpiopin=14,temp=60000
++# ─────────────────────────────────────────────────────────────────────────────
++EXAVIZ_FRAGMENT
++
++    ok "config.txt finalised:"
++    grep -v '^#' "${esp}/config.txt" | grep -v '^$' | sed 's/^/    /'
++}
++
++# ── Call deploy_config_txt (replaces blind cp) ────────────────────────────────
++deploy_config_txt "$ESP_ROOT" "${UEFI_TMP}/uefi"
