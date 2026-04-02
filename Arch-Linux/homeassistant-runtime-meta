@@ -1,0 +1,27 @@
+pkgname=homeassistant-runtime-meta
+pkgver=1.0
+pkgrel=1
+pkgdesc="Bootstrap meta package for Home Assistant container runtime"
+arch=('any')
+
+depends=(
+  'podman'
+  'podman-compose'
+  'podman-docker'
+  'cm5-container-podman'
+  'home-assistant'
+conmon
+cm5-base
+crun
+fuse-overlayfs
+slirp4netns
+)
+
+optdepends=(
+  'docker: alternative container runtime'
+  'home-assistant: install HA application'
+)
+
+useradd -m homeassistant
+
+loginctl enable-linger homeassistant
