@@ -10,8 +10,21 @@ LICENSE="GPL-2"
 SLOT="0"
 KEYWORDS="~amd64 ~arm64"
 
-DEPEND="virtual/linux-sources"
+DEPEND="virtual/linux-sources
 RDEPEND=""
 
 MODULE_NAMES="metis(driver:${S})"
 BUILD_TARGETS="modules"
+
+
+# udev rule so /dev/metis* is accessible without root
+    local udev_rules="${FILESDIR}/99-axelera-metis.rules"
+    if [[ -f ${udev_rules} ]] ; then
+        udev_dorules "${udev_rules}"
+    fi
+}
+
+pkg_postinst() {
+    linux-mod-r1_pkg_postinst   # prints depmod reminder
+    udev_reload
+}
