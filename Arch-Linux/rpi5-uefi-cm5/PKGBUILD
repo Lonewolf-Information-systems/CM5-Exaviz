@@ -1,0 +1,96 @@
+# Maintainer: Michael Lawrence <mike@michaellawrenceit.com>
+# Active fork targeting D0 BCM2712 / CM5 — worproject is dead
+pkgname=rpi5-uefi-cm5
+pkgver=0.3.r12.gabc1234   # from pkgver() below
+pkgrel=1
+pkgdesc="EDK2 UEFI firmware for RPi5/CM5 D0 stepping (NumberOneGit fork)"
+arch=('aarch64' 'x86_64')  # x86 for cross-installing to boot partition
+url="https://github.com/NumberOneGit/rpi5-uefi"
+license=('BSD-2-Clause-Patent')
+depends=()
+makedepends=('git')
+provides=('rpi5-uefi')
+conflicts=('rpi5-uefi')
+install="${pkgname}.install"
+
+source=(
+    "git+https://github.com/NumberOneGit/rpi5-uefi.git"
+)
+sha256sums=('SKIP')
+
+pkgver() {
+    cd "rpi5-uefi"
+    git describe --long --tags --abbrev=7 2>/dev/null \
+        | sed 's/^v//;s/\([^-]*-g\)/r\1/;s/-/./g' \
+        || printf "r%s.%s" \
+            "$(git rev-list --count HEAD)" \
+            "$(git rev-parse --short=7 HEAD)"
+}
+
+package() {
+    local _boot="${pkgdir}/boot/firmware"
+    install -dm755 "${_boot}"
+
+    cd "rpi5-uefi"
+
+    # Core UEFI firmware blob — replaces start*.elf in boot role
+    install -m644 RPI_EFI.fd "${_boot}/RPI_EFI.fd"
+
+    # Required RPi boot blobs (UEFI still needs these underneath)
+    for f in bootcode.bin fixup*.dat start*.elf; do
+        [[ -f "${f}" ]] && install -m644 "${f}" "${_boot}/"
+    done
+
+    # UEFI config.txt — MINIMAL, protected, owned by this package
+    # dtoverlay lines are INTENTIONALLY ABSENT — UEFI ignores them
+    # DO NOT add dtoverlay= here — configfs handles overlays at runtime
+    install -m644 /dev/stdin "${_boot}/config.txt" <<'EOF'
+# RPi5/CM5 UEFI boot — managed by rpi5-uefi-cm5
+# WARNING: dtoverlay= and dtparam= have NO EFFECT under UEFI
+# Device tree overlays are applied at runtime via configfs
+# See: /usr/lib/systemd/system/dt-overlays.service
+
+armstub=RPI_EFI.fd
+device_tree_address=0x1f0000
+device_tree_end=0x210000
+framebuffer_depth=32
+disable_overscan=1
+usb_max_current_enable=1
+force_turbo=1
+# CM5-specific: enable PCIe for Metis AIPU + NVMe
+dtparam=pciex1=on
+EOF
+
+    # The DTB UEFI passes to GRUB — CM5-specific
+    # GRUB then passes it to the kernel via 'devicetree' command
+    for dtb in \
+        bcm2712-rpi-cm5-cm5io.dtb \
+        bcm2712-rpi-cm5.dtb \
+        bcm2712-rpi-5-b.dtb; do
+        [[ -f "${dtb}" ]] && \
+            install -m644 "${dtb}" "${_boot}/${dtb}" && break
+    done
+
+    # GRUB fragment — devicetree passthrough
+    install -dm755 "${pkgdir}/etc/grub.d"
+    install -m755 /dev/stdin "${pkgdir}/etc/grub.d/10_rpi5_dtb" <<'GRUBEOF'
+#!/bin/sh
+# RPi5/CM5 UEFI — pass static DTB to kernel via GRUB
+# Overlays applied post-boot via configfs, NOT here
+set -e
+. /usr/share/grub/grub-mkconfig_lib
+
+for _dtb in \
+    /boot/firmware/bcm2712-rpi-cm5-cm5io.dtb \
+    /boot/firmware/bcm2712-rpi-cm5.dtb \
+    /boot/firmware/bcm2712-rpi-5-b.dtb; do
+    if test -f "${_dtb}"; then
+        cat <<EOF
+  echo "Loading CM5 DTB: ${_dtb}"
+  devicetree ${_dtb}
+EOF
+        break
+    fi
+done
+GRUBEOF
+}
