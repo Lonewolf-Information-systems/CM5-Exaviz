@@ -1,0 +1,40 @@
+# /etc/default/grub — CM5 UEFI additions
+# DTB is handled by /etc/grub.d/10_rpi5_dtb — do NOT set GRUB_DTB here
+# Setting GRUB_DTB here overrides grub.d scripts and breaks the fallback chain
+
+GRUB_CMDLINE_LINUX_DEFAULT="quiet rd.driver.post=metis rd.driver.post=rtl8365mb"
+# rd.driver.post: modprobed after udev settles in initramfs
+# metis: Axelera AIPU — needs DT PCIe node to exist first
+# rtl8365mb: DSA switch — needs cruiser overlay applied first
+
+# Serial console for CM5 debug (RP1 UART, not ttyAMA0)
+# GRUB_TERMINAL="serial console"
+# GRUB_SERIAL_COMMAND="serial --unit=0 --speed=115200"
+
+GRUB_TIMEOUT=3
+GRUB_DEFAULT=0
+```
+
+---
+
+**The full boot sequence on your UEFI CM5:**
+```
+EEPROM → RPI_EFI.fd
+    │
+    └─ config.txt: armstub= + pciex1=on only
+           │
+           └─ UEFI hands off to GRUB (EFI partition)
+                  │
+                  └─ grub.d/10_rpi5_dtb: devicetree bcm2712-rpi-cm5.dtb
+                         │
+                         └─ kernel loads → dracut initramfs
+                                │
+                                └─ initqueue/settled:
+                                       apply-overlays.sh
+                                       ├─ mount configfs
+                                       ├─ cat cruiser.dtbo → overlays/cruiser/dtbo
+                                       ├─ modprobe rtl8365mb  ← DSA switch
+                                       ├─ modprobe hci_uart   ← BT
+                                       └─ modprobe metis      ← AIPU
+                                              │
+                                              └─ pivot_root → real system
