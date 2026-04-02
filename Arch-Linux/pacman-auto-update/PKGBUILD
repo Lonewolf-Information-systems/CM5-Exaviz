@@ -1,0 +1,13 @@
+pkgname=pacman-auto-update
+pkgver=1.0
+pkgrel=1
+pkgdesc="Meta package to auto-update pacman and Arch packages"
+arch=('any')
+depends=('cron' 'pacman-contrib')
+source=("https://github.com/cmuench/pacman-auto-update/archive/refs/heads/master.tar.gz")
+sha256sums=('SKIP') # or put actual sum
+
+package() {
+    cd "$srcdir/pacman-auto-update-master"
+    install -Dm755 install.sh "$pkgdir/usr/bin/pacman-auto-update"
+}
