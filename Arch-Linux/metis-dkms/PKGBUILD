@@ -1,24 +1,53 @@
+# Maintainer: Michael Lawrence <mike@michaellawrenceit.com>
 pkgname=metis-dkms
 pkgver=1.5.0
 pkgrel=1
-pkgdesc="Axelera Metis PCIe driver (DKMS)"
+pkgdesc="Axelera Metis PCIe AIPU kernel module (DKMS)"
 arch=('x86_64' 'aarch64')
 url="https://github.com/axelera-ai-hub/axelera-driver"
-license=('GPL2')
-depends=('dkms')
-makedepends=('linux-headers')
-source=("$pkgname-$pkgver::https://github.com/axelera-ai-hub/axelera-driver/archive/refs/tags/v$pkgver.tar.gz")
-sha256sums=('SKIP')
+license=('GPL-2.0-only')
+depends=('dkms' 'linux-headers')
+install="${pkgname}.install"
+source=(
+    "${pkgname}-${pkgver}.tar.gz::https://github.com/axelera-ai-hub/axelera-driver/archive/refs/tags/v${pkgver}.tar.gz"
+    "dkms.conf"
+    "99-axelera-metis.rules"
+    "axelera.sysusers"
+    "axelera.tmpfiles"
+)
+sha256sums=(
+    'SKIP'    # replace with: sha256sum after first download
+    'SKIP'
+    'SKIP'
+    'SKIP'
+    'SKIP'
+)
 
-build() {
-	cd axelera-driver-$pkgver
-}
+# No build() — DKMS builds the module on install, not at package time
 
 package() {
-	cd axelera-driver-$pkgver
-	install -d "$pkgdir/usr/src/metis-$pkgver"
-	cp -r . "$pkgdir/usr/src/metis-$pkgver"
+    local _src="axelera-driver-${pkgver}"
+    local _dest="${pkgdir}/usr/src/metis-${pkgver}"
 
-	install -Dm644 dkms.conf \
-		"$pkgdir/usr/src/metis-$pkgver/dkms.conf"
+    # Substitute version into dkms.conf before installing
+    sed "s/@PKGVER@/${pkgver}/" dkms.conf > "${srcdir}/dkms.conf.out"
+
+    # Install driver sources for DKMS
+    install -dm755 "${_dest}"
+    cp -a "${_src}/." "${_dest}/"
+
+    # Overwrite dkms.conf with our corrected/versioned one
+    install -m644 "${srcdir}/dkms.conf.out" "${_dest}/dkms.conf"
+
+    # udev rules
+    install -Dm644 99-axelera-metis.rules \
+        "${pkgdir}/usr/lib/udev/rules.d/99-axelera-metis.rules"
+
+    # sysusers.d — axelera group + user
+    install -Dm644 axelera.sysusers \
+        "${pkgdir}/usr/lib/sysusers.d/axelera.conf"
+
+    # tmpfiles.d — /var/lib/axelera owned by axelera:axelera
+    install -Dm644 axelera.tmpfiles \
+        "${pkgdir}/usr/lib/tmpfiles.d/axelera.conf"
 }
