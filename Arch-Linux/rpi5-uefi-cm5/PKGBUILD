@@ -94,3 +94,16 @@ EOF
 done
 GRUBEOF
 }
+post_install() {
+    echo "  -> Regenerating GRUB config for CM5 DTB passthrough..."
+    grub-mkconfig -o /boot/grub/grub.cfg 2>/dev/null || \
+        echo "  WARNING: grub-mkconfig failed — run manually"
+    echo "  -> Enabling dt-overlays.service for runtime configfs overlays"
+    systemctl enable dt-overlays.service 2>/dev/null || true
+    echo ""
+    echo "  IMPORTANT: config.txt is managed by this package."
+    echo "  dtoverlay= lines have NO EFFECT under UEFI."
+    echo "  Overlays applied at runtime via: systemctl status dt-overlays"
+}
+
+post_upgrade() { post_install; }
