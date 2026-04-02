@@ -1,0 +1,26 @@
+name: arch-package-supply-chain
+
+on:
+  push:
+    paths:
+      - 'Arch-Linux/**'
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    container: archlinux:latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - run: pacman -Sy --noconfirm base-devel
+
+      - name: Build
+        working-directory: Arch-Linux
+        run: makepkg -s --noconfirm
+
+      - name: Upload
+        uses: actions/upload-artifact@v4
+        with:
+          name: pkg
+          path: Arch-Linux/*.pkg.tar.*
