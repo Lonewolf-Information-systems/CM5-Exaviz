@@ -10,7 +10,9 @@ LICENSE="GPL-2"
 SLOT="0"
 KEYWORDS="~amd64 ~arm64"
 
-DEPEND="virtual/linux-sources
+DEPEND="virtual/linux-sources 
+virtual/udev"
+
 RDEPEND=""
 
 MODULE_NAMES="metis(driver:${S})"
