@@ -24,7 +24,12 @@ SLOT="0"
 
 # linux-mod-r1 pulls in virtual/linux-sources automatically via linux-info
 # udev is runtime-only — not needed to build the module
+DEPEND="
+    acct-group/axelera
+    acct-user/axelera
+"
 RDEPEND="
+    ${DEPEND}
     virtual/udev
 "
 BDEPEND=""
