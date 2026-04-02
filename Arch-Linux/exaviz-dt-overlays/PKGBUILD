@@ -1,46 +1,119 @@
-# PKGBUILD: exaviz-dt-overlays
-# Device tree overlays for Exaviz Cruiser CM5 carrier
-# Source: extracted from Exaviz Debian BSP or their GitHub
-
+# Maintainer: Michael Lawrence <mike@michaellawrenceit.com>
 pkgname=exaviz-dt-overlays
-pkgver=1.0.0                    # update from their releases
+pkgver=1.0.0
 pkgrel=1
-pkgdesc="Device tree overlays for Exaviz Cruiser CM5 carrier board"
+pkgdesc="Device tree overlays for Exaviz Cruiser CM5 (firmware or UEFI)"
 arch=('aarch64')
-url="https://github.com/exaviz-ai/cruiser"   # placeholder — check actual repo
-license=('GPL2')
+url="https://exa-pedia.com/docs/cruiser/software/"
+license=('GPL-2.0-only')
 depends=('linux-rpi')
-# If they have a GitHub releases page:
+makedepends=('dpkg')
+install="${pkgname}.install"
+
+_debpkg="exaviz-dkms_${pkgver}_arm64.deb"
 source=(
-    "https://github.com/exaviz-ai/cruiser/releases/download/v${pkgver}/exaviz-overlays-${pkgver}.tar.gz"
-    # or extract from their .deb:
-    # "exaviz-cruiser-dtb_${pkgver}_arm64.deb"
+    "https://apt.exaviz.com/pool/main/e/exaviz-dkms/${_debpkg}"
 )
-sha256sums=('SKIP')             # fill in once source is known
+sha256sums=('SKIP')
+
+prepare() {
+    cd "${srcdir}"
+    ar x "${_debpkg}"
+    if   [[ -f data.tar.xz  ]]; then tar xf data.tar.xz
+    elif [[ -f data.tar.zst ]]; then tar xf data.tar.zst
+    elif [[ -f data.tar.gz  ]]; then tar xf data.tar.gz
+    fi
+}
 
 package() {
-    # DTB overlays go to /boot/overlays/ — same path as RPi firmware expects
-    install -dm755 "${pkgdir}/boot/overlays"
+    local _fw="${pkgdir}/boot/firmware"
+    install -dm755 "${_fw}/overlays"
 
-    # adjust glob to match actual extracted filenames
-    for dtbo in "${srcdir}"/overlays/*.dtbo \
-                "${srcdir}"/*.dtbo; do
-        [[ -f "$dtbo" ]] && \
-            install -Dm644 "$dtbo" "${pkgdir}/boot/overlays/$(basename "$dtbo")"
+    # --- Install .dtbo files regardless of boot path ---
+    # Under RPi firmware: loaded via config.txt dtoverlay=
+    # Under UEFI: NOT auto-loaded but kept for manual DTB patching
+    find "${srcdir}" -name "*.dtbo" | while read -r f; do
+        install -Dm644 "${f}" "${_fw}/overlays/$(basename "${f}")"
     done
 
-    # Base DTB if they ship a modified one
-    for dtb in "${srcdir}"/*.dtb; do
-        [[ -f "$dtb" ]] && \
-            install -Dm644 "$dtb" "${pkgdir}/boot/$(basename "$dtb")"
+    # Static DTB — needed by GRUB under UEFI path
+    find "${srcdir}" -name "bcm2712*.dtb" | while read -r f; do
+        install -Dm644 "${f}" "${_fw}/$(basename "${f}")"
     done
 
-    # Install hook to append to config.txt if needed
+    # --- RPi firmware path: config.txt snippet ---
+    # Installed to /usr/share — post_install() handles appending
+    # ONLY if armstub=RPI_EFI.fd is NOT detected in config.txt
     install -dm755 "${pkgdir}/usr/share/exaviz"
     cat > "${pkgdir}/usr/share/exaviz/config-fragment.txt" <<'EOF'
-# Exaviz Cruiser CM5 overlays
+# Exaviz Cruiser CM5 — appended by exaviz-dt-overlays
+# Only active under RPi firmware boot (no armstub=RPI_EFI.fd)
+[cm5]
+dtoverlay=cruiser-raspberrypi-cm5
 dtparam=pciex1=on
-# dtoverlay=exaviz-sata          # uncomment if SATA overlay ships
-# dtoverlay=exaviz-fan-control   # if carrier has managed fan
+dtparam=pciex1_gen=3
+EOF
+
+    # --- UEFI path: GRUB snippet ---
+    # config.txt is owned by UEFI firmware — do NOT touch it
+    # GRUB passes the static DTB; overlays must be pre-merged
+    install -dm755 "${pkgdir}/etc/grub.d"
+    cat > "${pkgdir}/etc/grub.d/10_exaviz_dtb" <<'EOF'
+#!/bin/sh
+# Exaviz Cruiser CM5 — GRUB DTB for UEFI boot path
+# Only sourced when armstub=RPI_EFI.fd is present
+set -e
+. /usr/share/grub/grub-mkconfig_lib
+
+# Pass the Cruiser-specific DTB (overlays pre-merged at build time)
+# If exaviz ships a merged DTB use that; otherwise fall back to stock CM5
+for dtb in \
+    /boot/firmware/bcm2712-rpi-cm5-exaviz.dtb \
+    /boot/firmware/bcm2712-rpi-cm5.dtb \
+    /boot/firmware/bcm2712-rpi-5-b.dtb; do
+    if [[ -f "${dtb}" ]]; then
+        echo "  echo 'Loading Exaviz DTB: ${dtb}'"
+        echo "  devicetree ${dtb}"
+        break
+    fi
+done
+EOF
+    chmod 755 "${pkgdir}/etc/grub.d/10_exaviz_dtb"
+
+    # --- dracut module drop-in ---
+    # Ensures DTB is embedded in initrd for UEFI path
+    install -dm755 "${pkgdir}/etc/dracut.conf.d"
+    cat > "${pkgdir}/etc/dracut.conf.d/50-exaviz-dtb.conf" <<'EOF'
+# Exaviz Cruiser CM5 — include DTB in initrd (UEFI/dracut path)
+# dracut-ng: embed DTB so early userspace can access it
+install_items+=" /boot/firmware/bcm2712-rpi-cm5.dtb "
+EOF
+
+    # pacman hook — warn on kernel upgrade for both paths
+    install -dm755 "${pkgdir}/usr/share/libalpm/hooks"
+    cat > "${pkgdir}/usr/share/libalpm/hooks/exaviz-dt.hook" <<'EOF'
+[Trigger]
+Type = Package
+Operation = Upgrade
+Target = linux-rpi
+
+[Action]
+Description = Exaviz: check DTB/overlay config after kernel upgrade
+When = PostTransaction
+Exec = /usr/share/exaviz/check-boot-path.sh
+EOF
+
+    install -Dm755 /dev/stdin \
+        "${pkgdir}/usr/share/exaviz/check-boot-path.sh" <<'EOF'
+#!/bin/bash
+CFG=/boot/firmware/config.txt
+if [[ -f "${CFG}" ]] && grep -q "armstub=RPI_EFI.fd" "${CFG}"; then
+    echo "  [exaviz] UEFI boot detected — config.txt NOT modified"
+    echo "  [exaviz] GRUB DTB: /etc/grub.d/10_exaviz_dtb active"
+    echo "  [exaviz] Run: grub-mkconfig -o /boot/grub/grub.cfg"
+else
+    echo "  [exaviz] RPi firmware boot detected"
+    echo "  [exaviz] Verify dtoverlay=cruiser-raspberrypi-cm5 in config.txt"
+fi
 EOF
 }
