@@ -30,3 +30,11 @@ Architecture = riscv64
 Server = https://github.com/felixonmars/archriscv-packages/releases/download/mirrorlist/$repo/os/$arch
 # or a proper mirror:
 Server = https://riscv.mirror.pkgbuild.com/repo/$repo/$arch
+# /etc/schroot/chroot.d/riscv64.conf
+[riscv64]
+type=directory
+directory=/srv/chroot/riscv64
+users=youruser
+root-groups=root
+personality=linux
+
