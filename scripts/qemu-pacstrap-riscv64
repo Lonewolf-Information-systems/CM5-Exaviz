@@ -1,0 +1,32 @@
+#!/bin/bash
+# qemu-pacstrap-riscv64
+set -e
+
+TARGET="${1:?Usage: $0 <rootfs-dir> [packages...]}"
+shift
+PACKAGES=("$@")
+
+QEMU_BIN="/usr/bin/qemu-riscv64-static"
+PACMAN_CONF="/etc/pacstrap-riscv64/pacman.conf"  # custom conf pointing to riscv64 repos
+
+[[ ! -f "$QEMU_BIN" ]] && { echo "Install qemu-user-static"; exit 1; }
+
+mkdir -p "$TARGET/usr/bin"
+cp "$QEMU_BIN" "$TARGET/usr/bin/"
+
+# pacstrap with custom conf for riscv64 repos
+pacstrap -C "$PACMAN_CONF" "$TARGET" base "${PACKAGES[@]}"
+
+# or via proot if no root available:
+# proot -q qemu-riscv64-static -r "$TARGET" /bin/sh -c "pacman -Sy base ${PACKAGES[*]}"
+
+rm -f "$TARGET/usr/bin/qemu-riscv64-static"
+
+# /etc/pacstrap-riscv64/pacman.conf
+[options]
+Architecture = riscv64
+
+[core]
+Server = https://github.com/felixonmars/archriscv-packages/releases/download/mirrorlist/$repo/os/$arch
+# or a proper mirror:
+Server = https://riscv.mirror.pkgbuild.com/repo/$repo/$arch
