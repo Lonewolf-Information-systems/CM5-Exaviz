@@ -1,0 +1,18 @@
+# Syntax only — no build needed
+# PKGBUILD Validation Cheatsheet
+bash -n PKGBUILD
+source PKGBUILD && echo "name=$pkgname ver=$pkgver arch=${arch[*]}"
+
+# Lint
+namcap PKGBUILD
+
+# Build + lint result
+makepkg -s
+namcap ${pkgname}-${pkgver}*.pkg.tar.zst
+
+# Clean chroot build (gold standard)
+# aarch64 on native CM5:
+makechrootpkg -c -r /var/lib/archbuild/extra-aarch64
+
+# Cross from x86 host:
+extra-aarch64-build
