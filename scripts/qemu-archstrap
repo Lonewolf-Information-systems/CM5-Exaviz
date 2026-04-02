@@ -1,0 +1,431 @@
+#!/usr/bin/env bash
+# qemu-archstrap - Cross-arch Arch Linux chroot/image bootstrapper
+# Inspired by qemu-debootstrap. Works from any Linux host distro.
+# Targets: x86_64, aarch64 (arm64), armv7h, riscv64 (experimental)
+#
+# Dependencies: qemu-user-static, binfmt-support OR systemd-binfmt,
+#               arch-install-scripts (pacstrap), wget/curl
+#
+# Usage:
+#   qemu-archstrap [OPTIONS] <arch> <target-dir> [packages...]
+#
+# Options:
+#   --mirror <url>          Override default mirror
+#   --pacman-conf <file>    Use custom pacman.conf
+#   --schroot               Set up a schroot entry after bootstrap
+#   --proot                 Use proot instead of chroot (rootless)
+#   --image <file> <size>   Create and mount a raw disk image instead
+#   --fetch-helpers         Download community scripts for arm64/riscv64
+#   --riscv64-experimental  Acknowledge riscv64 is best-effort/archriscv
+#   --no-cleanup            Leave QEMU binary in chroot on exit
+#   --help
+
+set -euo pipefail
+
+# ─── Colour output ────────────────────────────────────────────────────────────
+RED='\033[0;31m'; YELLOW='\033[1;33m'; GREEN='\033[0;32m'
+CYAN='\033[0;36m'; BOLD='\033[1m'; NC='\033[0m'
+info()  { echo -e "${CYAN}[qemu-archstrap]${NC} $*"; }
+ok()    { echo -e "${GREEN}[  OK  ]${NC} $*"; }
+warn()  { echo -e "${YELLOW}[ WARN ]${NC} $*"; }
+die()   { echo -e "${RED}[ FAIL ]${NC} $*" >&2; exit 1; }
+
+# ─── Defaults ─────────────────────────────────────────────────────────────────
+ARCH=""
+TARGET=""
+PACKAGES=(base)
+MIRROR=""
+PACMAN_CONF=""
+USE_SCHROOT=false
+USE_PROOT=false
+IMAGE_FILE=""
+IMAGE_SIZE=""
+FETCH_HELPERS=false
+RISCV64_ACK=false
+NO_CLEANUP=false
+LOOP_DEV=""
+
+# ─── Arch → QEMU + Mirror + pacman Architecture mapping ───────────────────────
+map_arch() {
+    case "$1" in
+        x86_64)         QEMU_ARCH="x86_64";  PACMAN_ARCH="x86_64";
+                        DEFAULT_MIRROR="https://mirrors.kernel.org/archlinux" ;;
+        aarch64|arm64)  QEMU_ARCH="aarch64"; PACMAN_ARCH="aarch64";
+                        DEFAULT_MIRROR="https://mirror.archlinuxarm.org" ;;
+        armv7h)         QEMU_ARCH="arm";     PACMAN_ARCH="armv7h";
+                        DEFAULT_MIRROR="https://mirror.archlinuxarm.org" ;;
+        armv6h)         QEMU_ARCH="arm";     PACMAN_ARCH="armv6h";
+                        DEFAULT_MIRROR="https://mirror.archlinuxarm.org" ;;
+        riscv64)        QEMU_ARCH="riscv64"; PACMAN_ARCH="riscv64";
+                        DEFAULT_MIRROR="https://riscv.mirror.pkgbuild.com/repo" ;;
+        *)              die "Unknown architecture: $1" ;;
+    esac
+}
+
+# ─── Host arch detection — skip QEMU if native ────────────────────────────────
+host_arch() {
+    uname -m
+}
+
+needs_qemu() {
+    [[ "$(host_arch)" != "$QEMU_ARCH" ]]
+}
+
+# ─── binfmt registration check ────────────────────────────────────────────────
+ensure_binfmt() {
+    local arch="$1"
+    if ! mountpoint -q /proc/sys/fs/binfmt_misc 2>/dev/null; then
+        info "Mounting binfmt_misc..."
+        mount binfmt_misc -t binfmt_misc /proc/sys/fs/binfmt_misc \
+            || die "Cannot mount binfmt_misc — are you root?"
+    fi
+
+    # Check if already registered
+    local binfmt_entry="/proc/sys/fs/binfmt_misc/qemu-${arch}"
+    if [[ ! -f "$binfmt_entry" ]]; then
+        warn "binfmt entry for qemu-${arch} not found."
+        info "Trying systemd-binfmt..."
+        if command -v systemctl &>/dev/null; then
+            systemctl start systemd-binfmt 2>/dev/null || true
+        fi
+        if command -v update-binfmts &>/dev/null; then
+            update-binfmts --enable "qemu-${arch}" 2>/dev/null || true
+        fi
+        # Last resort: manual registration for riscv64 which is often missing
+        if [[ "$arch" == "riscv64" && ! -f "$binfmt_entry" ]]; then
+            info "Manually registering riscv64 binfmt..."
+            echo ':qemu-riscv64:M::\x7fELF\x02\x01\x01\x00\x00\x00\x00\x00\x00\x00\x00\x00\x02\x00\xf3\x00:\xff\xff\xff\xff\xff\xff\xff\x00\xff\xff\xff\xff\xff\xff\xff\xff\xfe\xff\xff\xff:/usr/bin/qemu-riscv64-static:F' \
+                > /proc/sys/fs/binfmt_misc/register \
+                || warn "Manual binfmt registration failed — proot fallback recommended"
+        fi
+    else
+        ok "binfmt qemu-${arch} registered"
+    fi
+}
+
+# ─── Generate pacman.conf for target arch ─────────────────────────────────────
+generate_pacman_conf() {
+    local arch="$1" mirror="$2" outfile="$3"
+
+    case "$arch" in
+        x86_64)
+            cat > "$outfile" <<EOF
+[options]
+HoldPkg     = pacman glibc
+Architecture = auto
+
+[core]
+Include = /etc/pacman.d/mirrorlist
+
+[extra]
+Include = /etc/pacman.d/mirrorlist
+
+[community]
+Include = /etc/pacman.d/mirrorlist
+EOF
+            ;;
+        aarch64|armv7h|armv6h)
+            cat > "$outfile" <<EOF
+[options]
+HoldPkg      = pacman glibc
+Architecture = ${arch}
+
+[core]
+Server = ${mirror}/\$arch/\$repo
+
+[extra]
+Server = ${mirror}/\$arch/\$repo
+
+[community]
+Server = ${mirror}/\$arch/\$repo
+
+[alarm]
+Server = ${mirror}/\$arch/\$repo
+
+[aur]
+Server = ${mirror}/\$arch/\$repo
+EOF
+            ;;
+        riscv64)
+            # archriscv — experimental, separate repo structure
+            cat > "$outfile" <<EOF
+[options]
+HoldPkg      = pacman glibc
+Architecture = riscv64
+
+# archriscv — community effort, upstreaming to mainline Arch
+# https://github.com/felixonmars/archriscv-packages
+[core]
+Server = ${mirror}/\$repo/os/\$arch
+
+[extra]
+Server = ${mirror}/\$repo/os/\$arch
+
+[extra-testing]
+Server = ${mirror}/\$repo/os/\$arch
+EOF
+            warn "riscv64 uses archriscv repos — package coverage is best-effort"
+            ;;
+    esac
+    ok "Generated pacman.conf → $outfile"
+}
+
+# ─── Optional: raw disk image creation ────────────────────────────────────────
+setup_image() {
+    local imgfile="$1" size="$2" mountpoint="$3"
+    info "Creating ${size} image: ${imgfile}"
+    truncate -s "$size" "$imgfile"
+    # Simple single ext4 partition (override with --pacman-conf for GPT/EFI layout)
+    mkfs.ext4 -F "$imgfile" || die "mkfs.ext4 failed"
+    mkdir -p "$mountpoint"
+    LOOP_DEV=$(losetup --find --show "$imgfile") || die "losetup failed"
+    mount "$LOOP_DEV" "$mountpoint" || die "mount failed"
+    ok "Image mounted at $mountpoint (loop: $LOOP_DEV)"
+}
+
+cleanup_image() {
+    if [[ -n "$LOOP_DEV" ]]; then
+        info "Unmounting image..."
+        umount "$TARGET" 2>/dev/null || true
+        losetup -d "$LOOP_DEV" 2>/dev/null || true
+        ok "Loop device $LOOP_DEV released"
+    fi
+}
+
+# ─── Optional: schroot config entry ───────────────────────────────────────────
+setup_schroot() {
+    local name arch dir
+    name="archstrap-${ARCH}-$(basename "$TARGET")"
+    dir="$(realpath "$TARGET")"
+    info "Writing schroot config: /etc/schroot/chroot.d/${name}.conf"
+    mkdir -p /etc/schroot/chroot.d
+    cat > "/etc/schroot/chroot.d/${name}.conf" <<EOF
+[${name}]
+type=directory
+directory=${dir}
+users=${SUDO_USER:-$USER}
+root-groups=root
+personality=linux
+description=qemu-archstrap ${ARCH} chroot
+EOF
+    ok "schroot entry created — use: schroot -c ${name}"
+}
+
+# ─── --fetch-helpers: pull community scripts ──────────────────────────────────
+fetch_helpers() {
+    local helpdir="${TARGET}/opt/archstrap-helpers"
+    mkdir -p "$helpdir"
+    info "Fetching community helpers into ${helpdir}..."
+
+    # archstrap (original community bootstrapper)
+    if command -v git &>/dev/null; then
+        git clone --depth=1 https://github.com/archlinuxarm/PKGBUILDs \
+            "${helpdir}/alarm-pkgbuilds" 2>/dev/null \
+            && ok "ALARM PKGBUILDs cloned" \
+            || warn "Could not clone ALARM PKGBUILDs"
+
+        # archriscv ports (if riscv64)
+        if [[ "$ARCH" == "riscv64" ]]; then
+            git clone --depth=1 https://github.com/felixonmars/archriscv-packages \
+                "${helpdir}/archriscv-packages" 2>/dev/null \
+                && ok "archriscv packages cloned" \
+                || warn "Could not clone archriscv packages"
+        fi
+    else
+        warn "git not found — skipping repo clones"
+    fi
+
+    # alarm-image helper scripts
+    local alarm_img_url="https://raw.githubusercontent.com/graysky2/aur-alarm-build-scripts/master"
+    for script in mkimage_rpi5.sh mkimage_generic_arm64.sh; do
+        curl -fsSL "${alarm_img_url}/${script}" -o "${helpdir}/${script}" 2>/dev/null \
+            && chmod +x "${helpdir}/${script}" \
+            && ok "Fetched ${script}" \
+            || warn "Could not fetch ${script}"
+    done
+
+    # riscv64: grab archriscv bootstrap tarball info
+    if [[ "$ARCH" == "riscv64" ]]; then
+        cat > "${helpdir}/riscv64-notes.txt" <<'EOF'
+riscv64 Arch Linux — community resources:
+  - archriscv packages:  https://github.com/felixonmars/archriscv-packages
+  - Mirror:              https://riscv.mirror.pkgbuild.com
+  - Bootstrap tarball:   https://archriscv.felixc.at/images/
+  - RISC-V SBC support:  https://github.com/sehraf/riscv-arch-image-builder
+  - VisionFive2 images:  https://github.com/starfive-tech/VisionFive2
+  - Milk-V Mars/Pioneer: check archriscv forums
+
+parity with rpi5 targets:
+  - Milk-V Pioneer (SG2042, 64-core) — closest to rpi5 class but server form factor
+  - SpacemiT K1 / Bananapi F3 — mid tier, reasonable ALARM-style support
+  - VisionFive 2 — good community but slower SoC
+  - RISC-V parity with rpi5 performance: 2025-2026 window for SBC candidates
+EOF
+        ok "riscv64 notes written to ${helpdir}/riscv64-notes.txt"
+    fi
+}
+
+# ─── Usage ────────────────────────────────────────────────────────────────────
+usage() {
+    cat <<EOF
+${BOLD}qemu-archstrap${NC} — Cross-arch Arch Linux bootstrapper
+
+Usage:
+  qemu-archstrap [OPTIONS] <arch> <target-dir> [packages...]
+
+Architectures:
+  x86_64    aarch64    armv7h    armv6h
+  riscv64   (experimental — requires --riscv64-experimental)
+
+Options:
+  --mirror <url>              Override default package mirror
+  --pacman-conf <file>        Use existing pacman.conf instead of generated one
+  --schroot                   Create a schroot entry for the bootstrapped chroot
+  --proot                     Use proot (rootless) instead of chroot
+  --image <file> <size>       Bootstrap into a raw disk image (e.g. rpi5.img 4G)
+  --fetch-helpers             Pull community arm64/riscv64 scripts into chroot
+  --riscv64-experimental      Required flag to enable riscv64 target
+  --no-cleanup                Leave qemu-static binary in chroot after bootstrap
+  --help
+
+Examples:
+  # ARM64 chroot from Kali/Ubuntu host
+  sudo qemu-archstrap aarch64 /srv/chroot/arch-arm64 base base-devel
+
+  # rpi5 bootable image (aarch64)
+  sudo qemu-archstrap --image rpi5.img 4G aarch64 /mnt/rpi5 base linux-rpi
+
+  # riscv64 experimental chroot
+  sudo qemu-archstrap --riscv64-experimental --fetch-helpers \\
+       riscv64 /srv/chroot/arch-riscv64 base
+
+  # Rootless via proot
+  qemu-archstrap --proot aarch64 ~/arch-arm64-root base
+EOF
+    exit 0
+}
+
+# ─── Argument parsing ─────────────────────────────────────────────────────────
+[[ $# -eq 0 ]] && usage
+
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --help)                   usage ;;
+        --mirror)                 MIRROR="$2";                   shift 2 ;;
+        --pacman-conf)            PACMAN_CONF="$2";              shift 2 ;;
+        --schroot)                USE_SCHROOT=true;              shift   ;;
+        --proot)                  USE_PROOT=true;                shift   ;;
+        --image)                  IMAGE_FILE="$2"; IMAGE_SIZE="$3"; shift 3 ;;
+        --fetch-helpers)          FETCH_HELPERS=true;            shift   ;;
+        --riscv64-experimental)   RISCV64_ACK=true;              shift   ;;
+        --no-cleanup)             NO_CLEANUP=true;               shift   ;;
+        -*)                       die "Unknown option: $1" ;;
+        *)
+            if   [[ -z "$ARCH"   ]]; then ARCH="$1"
+            elif [[ -z "$TARGET" ]]; then TARGET="$1"
+            else PACKAGES+=("$1")
+            fi
+            shift ;;
+    esac
+done
+
+[[ -z "$ARCH"   ]] && die "No architecture specified"
+[[ -z "$TARGET" ]] && die "No target directory specified"
+
+# riscv64 gate
+if [[ "$ARCH" == "riscv64" && "$RISCV64_ACK" != true ]]; then
+    die "riscv64 is experimental. Re-run with --riscv64-experimental to proceed."
+fi
+
+# ─── Main ─────────────────────────────────────────────────────────────────────
+trap 'cleanup_image' EXIT
+
+map_arch "$ARCH"
+MIRROR="${MIRROR:-$DEFAULT_MIRROR}"
+
+info "Target arch : $ARCH"
+info "QEMU arch   : $QEMU_ARCH"
+info "Mirror      : $MIRROR"
+info "Target dir  : $TARGET"
+info "Packages    : ${PACKAGES[*]}"
+
+# Image setup if requested
+[[ -n "$IMAGE_FILE" ]] && setup_image "$IMAGE_FILE" "$IMAGE_SIZE" "$TARGET"
+
+# QEMU binary setup
+QEMU_STATIC="/usr/bin/qemu-${QEMU_ARCH}-static"
+if needs_qemu; then
+    [[ ! -f "$QEMU_STATIC" ]] && \
+        die "QEMU binary not found: ${QEMU_STATIC}\nInstall qemu-user-static"
+    ensure_binfmt "$QEMU_ARCH"
+    mkdir -p "${TARGET}/usr/bin"
+    cp "$QEMU_STATIC" "${TARGET}/usr/bin/"
+    ok "Copied ${QEMU_STATIC} → ${TARGET}/usr/bin/"
+else
+    info "Native arch — QEMU not needed"
+fi
+
+# pacman.conf
+TMPCONF=""
+if [[ -z "$PACMAN_CONF" ]]; then
+    TMPCONF=$(mktemp /tmp/qemu-archstrap-pacman-XXXX.conf)
+    generate_pacman_conf "$ARCH" "$MIRROR" "$TMPCONF"
+    PACMAN_CONF="$TMPCONF"
+fi
+
+# Bootstrap
+mkdir -p "$TARGET"
+
+if $USE_PROOT; then
+    command -v proot &>/dev/null || die "proot not installed"
+    info "Bootstrapping via proot (rootless)..."
+    # First layer: use pacman from host to install into target
+    # proot approach: bind host pacman db, then switch root
+    proot \
+        -q "qemu-${QEMU_ARCH}-static" \
+        --bind=/etc/resolv.conf \
+        -r "$TARGET" \
+        pacman --config "$PACMAN_CONF" \
+               --noconfirm \
+               -r "$TARGET" \
+               -Sy "${PACKAGES[@]}"
+else
+    [[ $EUID -ne 0 ]] && die "Root required for chroot mode. Use --proot for rootless."
+    info "Bootstrapping via pacstrap..."
+    pacstrap -C "$PACMAN_CONF" "$TARGET" "${PACKAGES[@]}" \
+        || die "pacstrap failed"
+fi
+
+ok "Bootstrap complete"
+
+# Optional helpers
+$FETCH_HELPERS && fetch_helpers
+
+# schroot entry
+$USE_SCHROOT && setup_schroot
+
+# Cleanup QEMU binary
+if needs_qemu && ! $NO_CLEANUP; then
+    rm -f "${TARGET}/usr/bin/qemu-${QEMU_ARCH}-static"
+    ok "Removed qemu-${QEMU_ARCH}-static from chroot"
+fi
+
+[[ -n "$TMPCONF" ]] && rm -f "$TMPCONF"
+
+echo ""
+echo -e "${BOLD}${GREEN}─── Bootstrap complete ───────────────────────────────────────────${NC}"
+echo -e "  Arch    : ${CYAN}${ARCH}${NC}"
+echo -e "  Target  : ${CYAN}${TARGET}${NC}"
+if [[ -n "$IMAGE_FILE" ]]; then
+echo -e "  Image   : ${CYAN}${IMAGE_FILE}${NC}"
+fi
+echo ""
+echo -e "  Enter chroot:"
+if $USE_SCHROOT; then
+    echo -e "    ${YELLOW}schroot -c archstrap-${ARCH}-$(basename "$TARGET")${NC}"
+elif $USE_PROOT; then
+    echo -e "    ${YELLOW}proot -q qemu-${QEMU_ARCH}-static -r ${TARGET} /bin/bash${NC}"
+else
+    echo -e "    ${YELLOW}arch-chroot ${TARGET}${NC}"
+fi
+echo -e "${GREEN}──────────────────────────────────────────────────────────────────${NC}"
