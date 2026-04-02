@@ -23,7 +23,7 @@ SLOT="0"
 
 # linux-mod-r1 handles DEPEND on virtual/linux-sources
 # and kernel config checks automatically
-RDEPEND=""
+RDEPEND="virtual/udev"
 BDEPEND=""
 
 # Declare the module to build
