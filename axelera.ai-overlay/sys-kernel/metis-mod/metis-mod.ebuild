@@ -4,7 +4,7 @@ inherit linux-mod-r1
 
 DESCRIPTION="Axelera Metis AI accelerator kernel module"
 HOMEPAGE="https://github.com/axelera-ai-hub/axelera-driver"
-SRC_URI="https://github.com/axelera-ai-hub/axelera-driver/archive/refs/tags/v1.5.tar.gz -> ${P}.tar.gz"
+SRC_URI="https://github.com/axelera-ai-hub/axelera-driver/archive/refs/tags/v${PV}.tar.gz -> ${P}.tar.gz"
 
 LICENSE="GPL-2"
 SLOT="0"
