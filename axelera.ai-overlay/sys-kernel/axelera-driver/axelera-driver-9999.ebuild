@@ -23,8 +23,14 @@ SLOT="0"
 
 # linux-mod-r1 handles DEPEND on virtual/linux-sources
 # and kernel config checks automatically
-DEPEND="virtual/linux-sources 
-virtual/udev"
+DEPEND="
+    acct-group/axelera
+    acct-user/axelera
+"
+RDEPEND="
+    ${DEPEND}
+    virtual/udev
+"
 BDEPEND=""
 
 # Declare the module to build
