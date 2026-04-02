@@ -1,3 +1,3 @@
 # files/99-axelera-metis.rules
-SUBSYSTEM=="misc", KERNEL=="metis*", MODE="0660", GROUP="axelera"
-SUBSYSTEM=="misc", KERNEL=="metis*", TAG+="uaccess"
+SUBSYSTEM=="misc", KERNEL=="metis[0-9]*", \
+    MODE="0660", GROUP="axelera", TAG+="uaccess"
